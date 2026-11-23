@@ -25,13 +25,13 @@ if [ "$(id -u)" -eq 0 ]; then
 else
   command -v sudo >/dev/null 2>&1 || die "A sudo nincs telepítve."
   if [ -n "${SUDO_PASS:-}" ]; then
-    printf '%s\n' "$SUDO_PASS" | sudo -S -p '' -v >/dev/null 2>&1 \
-      || die "A megadott SUDO_PASS érvénytelen."
-    unset SUDO_PASS
+    # SSH-n, tty nélkül a sudo nem tudja gyorsítótárazni a jelszót,
+    # ezért minden híváshoz külön adjuk át stdin-en.
+    sudo_cmd() { printf '%s\n' "$SUDO_PASS" | sudo -S -p '' "$@"; }
   else
     sudo -v || die "Sudo jogosultság szükséges a Docker telepítéséhez."
+    sudo_cmd() { sudo "$@"; }
   fi
-  sudo_cmd() { sudo "$@"; }
 fi
 
 # ------------------------------------------------------------
@@ -56,12 +56,13 @@ else
   sudo_cmd apt-get update -qq
   sudo_cmd apt-get install -y -qq ca-certificates curl gnupg
   sudo_cmd install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    | sudo_cmd tee /etc/apt/keyrings/docker.asc >/dev/null
-  sudo_cmd chmod a+r /etc/apt/keyrings/docker.asc
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /tmp/stream-docker.asc
+  sudo_cmd install -m 0644 /tmp/stream-docker.asc /etc/apt/keyrings/docker.asc
+  rm -f /tmp/stream-docker.asc
   printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
-    "$(dpkg --print-architecture)" "$CODENAME" \
-    | sudo_cmd tee /etc/apt/sources.list.d/docker.list >/dev/null
+    "$(dpkg --print-architecture)" "$CODENAME" > /tmp/stream-docker.list
+  sudo_cmd install -m 0644 /tmp/stream-docker.list /etc/apt/sources.list.d/docker.list
+  rm -f /tmp/stream-docker.list
   sudo_cmd apt-get update -qq
   sudo_cmd apt-get install -y -qq \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -138,7 +139,7 @@ wait_http 7878  /ping                     Radarr        || FAILED=1
 wait_http 9696  /ping                     Prowlarr      || FAILED=1
 wait_http 8080  /                         qBittorrent   || FAILED=1
 wait_http 8096  /health                   Jellyfin      || FAILED=1
-wait_http 2283  /api/server-info/ping     Immich        || FAILED=1
+wait_http 2283  /ping                     Immich        || FAILED=1
 
 # ------------------------------------------------------------
 # 8. Összefoglaló

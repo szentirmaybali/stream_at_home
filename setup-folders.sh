@@ -33,7 +33,10 @@ mkdir -p \
   "$MEDIA_ROOT/immich/postgres" \
   "$MEDIA_ROOT/immich/model-cache"
 
-chown -R "$PUID:$PGID" \
+# Csak a létrehozott felső szintű könyvtárakat állítjuk be.
+# Rekurzív chown NEM kell: az Immich rootként ír a saját könyvtáraiba,
+# és a futó konténerek fájljait nem szabad áttulajdonítani.
+chown "$PUID:$PGID" \
   "$MEDIA_ROOT/appdata" \
   "$MEDIA_ROOT/media" \
   "$MEDIA_ROOT/torrents" \

@@ -142,7 +142,8 @@ services:
     networks:
       - arrnetwork
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8096/health || exit 1"]
+      # A Jellyfin image-ben nincs wget, curl viszont van.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -176,7 +177,7 @@ services:
     networks:
       - arrnetwork
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2283/api/server-info/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2283/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
