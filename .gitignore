@@ -1,0 +1,20 @@
+# Titkok és lokális konfig
+.env
+.env.*
+!.env.example
+
+# Adatok, konfigok, mentések — minden a mounted drive-on
+data/
+appdata/
+media/
+torrents/
+immich/
+library/
+postgres/
+backups/
+*.log
+
+# Szerkesztő/OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,237 @@
+name: stream-at-home
+
+# Minden image egy adott tag + digest párosra van rögzítve.
+# Frissítéskor szándékosan szerkeszd az image sort, majd:
+#   docker compose pull && docker compose up -d
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ============================================================
+  # SONARR — sorozatok
+  # ============================================================
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls6@sha256:339814bbf50599ac3b59077c252f29833d0138b59a062d0e82ce37bdc7f04f86
+    container_name: sonarr
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "002"
+      TZ: ${TZ:-Europe/Budapest}
+    ports:
+      - "8989:8989"
+    volumes:
+      - ${MEDIA_ROOT}/appdata/sonarr:/config
+      - ${MEDIA_ROOT}:/data
+    networks:
+      - arrnetwork
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  # ============================================================
+  # RADARR — filmek
+  # ============================================================
+  radarr:
+    image: lscr.io/linuxserver/radarr:7.0.3.10918-ls328@sha256:044788f5508b7f67a3e0368cdd142c77c4d4cd5aec2efaba53e1a68b6b6231e7
+    container_name: radarr
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "002"
+      TZ: ${TZ:-Europe/Budapest}
+    ports:
+      - "7878:7878"
+    volumes:
+      - ${MEDIA_ROOT}/appdata/radarr:/config
+      - ${MEDIA_ROOT}:/data
+    networks:
+      - arrnetwork
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  # ============================================================
+  # PROWLARR — indexerek
+  # FIGYELEM: a 3.x hibrid torrent (BitHUmen) parse hibás,
+  # lásd a README „Ismert probléma” szakaszát.
+  # ============================================================
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:3.0.2.5780-ls169@sha256:45117ba8439e2337a92ffe38a451a4dafc0be771754d05d88cdf102419d09646
+    container_name: prowlarr
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "002"
+      TZ: ${TZ:-Europe/Budapest}
+    ports:
+      - "9696:9696"
+    volumes:
+      - ${MEDIA_ROOT}/appdata/prowlarr:/config
+    networks:
+      - arrnetwork
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9696/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  # ============================================================
+  # QBITTORRENT — letöltő
+  # ============================================================
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls488@sha256:afed7399d0f336ee22d6d011b3c8c50a44e3810f0af6e3c4083d79e566f1677a
+    container_name: qbittorrent
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "002"
+      TZ: ${TZ:-Europe/Budapest}
+      WEBUI_PORT: "8080"
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    volumes:
+      - ${MEDIA_ROOT}/appdata/qbittorrent:/config
+      - ${MEDIA_ROOT}/torrents:/torrents
+    networks:
+      - arrnetwork
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  # ============================================================
+  # JELLYFIN — streaming
+  # ============================================================
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:12.4ubu2604-ls60@sha256:b10044530553b2506f06279bf0b5223f9534f434f87a277da4b8fa8ac386cb58
+    container_name: jellyfin
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "002"
+      TZ: ${TZ:-Europe/Budapest}
+    ports:
+      - "8096:8096"
+    volumes:
+      - ${MEDIA_ROOT}/appdata/jellyfin:/config
+      - ${MEDIA_ROOT}/media:/data/media
+    networks:
+      - arrnetwork
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8096/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging: *default-logging
+
+  # ============================================================
+  # IMMICH — fotók
+  # ============================================================
+  immich-server:
+    container_name: immich_server
+    image: ghcr.io/immich-app/immich-server:v3.4.2@sha256:fc880c1bf665b4aab1e74c15e56ab871225989cd546536e6b77e771869af06bd
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Budapest}
+      DB_HOSTNAME: database
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?A DB_PASSWORD nincs beállítva a .env-ben}
+      DB_DATABASE_NAME: ${DB_DATABASE_NAME:-immich}
+      REDIS_HOSTNAME: redis
+    ports:
+      - "2283:2283"
+    volumes:
+      - ${MEDIA_ROOT}/immich/library:/data
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      database:
+        condition: service_healthy
+    networks:
+      - arrnetwork
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2283/api/server-info/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging: *default-logging
+
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    image: ghcr.io/immich-app/immich-machine-learning:v3.4.2@sha256:739405742a79bd7447227c553bb62ed5491aa36acf00bc667af7f9c93b6fae91
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Budapest}
+      MACHINE_LEARNING_MODEL_REVISION: v2
+    volumes:
+      - ${MEDIA_ROOT}/immich/model-cache:/cache
+    networks:
+      - arrnetwork
+    logging: *default-logging
+
+  redis:
+    container_name: immich_redis
+    image: docker.io/valkey/valkey:9@sha256:1c2b25b09f354c66fe994733acdf12fcfd4bdf6f3bd92b88a93a70378d884056
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - arrnetwork
+    logging: *default-logging
+
+  database:
+    container_name: immich_postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?A DB_PASSWORD nincs beállítva a .env-ben}
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_DB: ${DB_DATABASE_NAME:-immich}
+      POSTGRES_INITDB_ARGS: --data-checksums
+    volumes:
+      - ${MEDIA_ROOT}/immich/postgres:/var/lib/postgresql/data
+    shm_size: 128mb
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_DATABASE_NAME:-immich}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - arrnetwork
+    logging: *default-logging
+
+networks:
+  arrnetwork:
+    driver: bridge
