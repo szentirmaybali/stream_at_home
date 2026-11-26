@@ -13,7 +13,7 @@ if [ -f .env ]; then
   set +a
 fi
 
-MEDIA_ROOT="${MEDIA_ROOT:-/home/bali/media}"
+MEDIA_ROOT="${MEDIA_ROOT:-/srv/stream-at-home}"
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 

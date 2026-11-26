@@ -13,6 +13,9 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
+# MEDIA_ROOT=/path ./install.sh — felülírja a .env-ben lévő adatgyökeret.
+REQUESTED_MEDIA_ROOT="${MEDIA_ROOT:-}"
+
 log()  { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;33m!\033[0m  %s\n' "$*"; }
 die()  { printf '\n\033[1;31mHIBA:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -87,6 +90,13 @@ if [ ! -f .env ]; then
 else
   log ".env már létezik — nem módosítom"
 fi
+
+if [ -n "$REQUESTED_MEDIA_ROOT" ]; then
+  if [ -f .env ]; then
+    sed -i "s|^MEDIA_ROOT=.*|MEDIA_ROOT=${REQUESTED_MEDIA_ROOT}|" .env
+  fi
+  log "MEDIA_ROOT felülírva: ${REQUESTED_MEDIA_ROOT}"
+fi
 chmod 600 .env
 
 set -a
@@ -98,6 +108,12 @@ set +a
 # ------------------------------------------------------------
 # 5. Könyvtárak a befűzött meghajtón
 # ------------------------------------------------------------
+if [ ! -d "$MEDIA_ROOT" ]; then
+  log "Adatgyökér létrehozása: $MEDIA_ROOT"
+  sudo_cmd mkdir -p "$MEDIA_ROOT"
+  sudo_cmd chown "$(id -u):$(id -g)" "$MEDIA_ROOT"
+fi
+
 log "Adatkönyvtárak előkészítése..."
 bash "$REPO_DIR/setup-folders.sh"
 
