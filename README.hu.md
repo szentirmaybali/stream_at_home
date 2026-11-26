@@ -33,18 +33,12 @@ Minden image **tag + digest** párosra van rögzítve a
 ## Telepítés
 
 Előfeltétel: Linux Mint 21/22 (Ubuntu/Debian alap), x86_64, kb. 4 GB RAM,
-egy adatmeghajtó a `MEDIA_ROOT` alatt (alapértelmezés: `/srv/stream-at-home`),
-sudo jog.
+egy adatmeghajtó a `MEDIA_ROOT` alatt (alapértelmezés: `/srv/stream-at-home`,
+a telepítő létrehozza), sudo jog.
 
 ```bash
 git clone https://github.com/szentirmaybali/stream_at_home.git
 cd stream_at_home
-
-# az adatgyökér létrehozása egyszer (az alapértelmezett útvonalhoz)
-sudo mkdir -p /srv/stream-at-home
-sudo chown "$USER:$USER" /srv/stream-at-home
-
-chmod +x install.sh setup-folders.sh
 ./install.sh
 ```
 
@@ -54,17 +48,24 @@ Más adatgyökérrel:
 MEDIA_ROOT=/mnt/media ./install.sh
 ```
 
+A telepítő bármelyik felhasználóval működik: a hívó numerikus UID/GID-jét
+(`sudo` esetén `SUDO_UID`/`SUDO_GID`) beírja a `.env` `PUID`/`PGID` értékébe,
+és ezzel a tulajdonossal hozza létre az adatkönyvtárakat. A rendszer
+időzónáját is kiolvassa. Docker nélküli, tiszta rendszeren a Docker CE-t és a
+Compose plugint is telepíti.
+
 A telepítő idempotens:
 
-1. ellenőrzi a rendszert, és szükség esetén feltelepíti a Docker CE-t +
-   Compose plugint a hivatalos Ubuntu repo-ból (Mint 22 → `noble`),
-2. felveszi a felhasználót a `docker` csoportba,
-3. létrehozza a `.env`-t az `.env.example` alapján, és **véletlenszerű
-   `DB_PASSWORD`-t generál**, majd `chmod 600`-t állít be,
-4. szükség esetén létrehozza a `MEDIA_ROOT`-ot, majd az adatkönyvtárakat a
-   meghajtón (`setup-folders.sh`),
-5. letölti a pinelt image-eket, elindítja a stacket,
-6. megvárja, hogy mind a hat HTTP végpont válaszoljon, majd kiírja az URL-eket.
+1. felismeri a hívó felhasználót, és az UID/GID-jét a `.env`-be írja,
+2. ellenőrzi a rendszert, és szükség esetén feltelepíti a Docker CE-t +
+   Compose plugint a hivatalos repóból (Mint 22 → `noble`, Debian → `debian`),
+3. felveszi a felhasználót a `docker` csoportba,
+4. létrehozza a `.env`-t az `.env.example` alapján, **véletlenszerű
+   `DB_PASSWORD`-t generál**, beállítja az időzónát, majd `chmod 600`-t ad,
+5. szükség esetén létrehozza a `MEDIA_ROOT`-ot, majd az adatkönyvtárakat a
+   cél-UID/GID tulajdonlással (`setup-folders.sh`),
+6. letölti a pinelt image-eket, elindítja a stacket,
+7. megvárja, hogy mind a hat HTTP végpont válaszoljon, majd kiírja az URL-eket.
 
 Nem interaktív (pl. SSH-s) futtatáshoz:
 
@@ -192,3 +193,7 @@ df -h "$MEDIA_ROOT"                        # meghajtó fogyása
 
 Ha a `docker compose` parancs „permission denied”: `newgrp docker`, vagy
 jelentkezz ki és vissza a VM-re (a csoporttagság csak új sessionben él).
+
+Ha a `.env` más felhasználóhoz tartozik (a `PUID`/`PGID` nem a te UID/GID-d),
+a telepítő leáll. Futtasd a tulajdonos felhasználóként, töröld a `.env`-et az
+újrageneráláshoz, vagy írd át benne a `PUID`/`PGID` értéket.

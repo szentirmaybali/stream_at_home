@@ -105,7 +105,7 @@ flowchart LR
 
 **Containers talk by service name, not host IP.** Prowlarr reaches Sonarr at `http://sonarr:8989`; Sonarr and Radarr reach qBittorrent at `qbittorrent:8080`. Host-published ports are for *you*, not for other containers. (This one is learned the hard way: a container calling `192.168.x.x:8989` often gets nothing, while `sonarr:8989` answers immediately.)
 
-**Idempotent installer, generated secret.** `install.sh` can be re-run safely. It creates `.env` only when missing, generates a 48-character `DB_PASSWORD`, sets `chmod 600`, and never echoes the secret. Non-interactive sudo is supported via `SUDO_PASS` without writing it anywhere.
+**Idempotent installer, generated secret.** `install.sh` can be re-run safely. It creates `.env` only when missing, derives `PUID`/`PGID` from the invoking user instead of assuming UID 1000, generates a 48-character `DB_PASSWORD`, sets `chmod 600`, and never echoes the secret. Non-interactive sudo is supported via `SUDO_PASS` without writing it anywhere.
 
 **Health checks with real dependencies.** Immich waits for Postgres and Valkey to be healthy before starting. Every HTTP service exposes a health check, and the installer polls six endpoints until they answer.
 
@@ -136,26 +136,19 @@ flowchart LR
 | | |
 |---|---|
 | OS | Debian / Ubuntu / Linux Mint (x86_64 or arm64) |
-| Docker | Docker CE + Compose plugin — the installer can add them |
+| Docker | Docker CE + Compose plugin — installed automatically if missing |
 | RAM | ~4 GB (Immich ML is the hungry one) |
-| Disk | a data drive mounted at `MEDIA_ROOT` |
-| Access | sudo |
+| Disk | a data drive mounted at `MEDIA_ROOT` (created if missing) |
+| Access | a normal user with sudo — the installer reads your UID/GID, nothing is tied to UID 1000 |
 
-### 1. Clone and pick a data root
+### 1. Clone
 
 ```bash
 git clone https://github.com/szentirmaybali/stream_at_home.git
 cd stream_at_home
 ```
 
-The default data root is `/srv/stream-at-home`. Create it once and give your user ownership:
-
-```bash
-sudo mkdir -p /srv/stream-at-home
-sudo chown "$USER:$USER" /srv/stream-at-home
-```
-
-Prefer a different path? Pass it to the installer — it is written into `.env`:
+That is the whole preparation. The installer creates `/srv/stream-at-home` (or the path you pass) with the right ownership, installs Docker if needed, and generates the secrets. If your media drive is mounted elsewhere, point the installer at it:
 
 ```bash
 MEDIA_ROOT=/mnt/media ./install.sh
@@ -164,7 +157,6 @@ MEDIA_ROOT=/mnt/media ./install.sh
 ### 2. Install
 
 ```bash
-chmod +x install.sh setup-folders.sh
 ./install.sh
 ```
 
@@ -175,6 +167,8 @@ SUDO_PASS=your-sudo-password ./install.sh
 ```
 
 `SUDO_PASS` is used only for sudo authentication. It is not written to `.env`, not logged, and not committed. On a normal terminal just run `./install.sh` and let sudo ask.
+
+The installer works for **any user**: it takes the caller's numeric UID/GID (or `SUDO_UID`/`SUDO_GID` when started with `sudo`), writes them into `.env` as `PUID`/`PGID`, and creates the data tree with that ownership. It also reads the system timezone instead of assuming one.
 
 ### 3. Open the UIs
 
@@ -191,12 +185,13 @@ Immich       http://<host-ip>:2283
 
 ### What the installer does
 
-1. Verifies a Debian/Ubuntu-based system and maps the release to the right Docker repo (Mint 22 → `noble`).
-2. Installs Docker CE + the Compose plugin from Docker's official repository if missing, and adds your user to the `docker` group.
-3. Creates `.env` from `.env.example` with a random `DB_PASSWORD`, then `chmod 600`.
-4. Creates any missing directories under `MEDIA_ROOT`.
-5. Pulls the pinned images and runs `docker compose up -d --remove-orphans`.
-6. Polls all six HTTP endpoints (up to ~3 minutes) and prints a summary with next steps.
+1. Detects the invoking user (or `SUDO_UID`/`SUDO_GID`) and stores that numeric UID/GID in `.env`.
+2. Verifies a Debian/Ubuntu-based system and maps it to the right Docker repository (Mint 22 → `noble`, Debian → `debian`).
+3. Installs Docker CE + the Compose plugin from Docker's official repository when missing, and starts the Docker service.
+4. Adds the user to the `docker` group (effective after the next login).
+5. Creates `.env` from `.env.example` with a random `DB_PASSWORD`, the detected UID/GID and the system timezone; `chmod 600`.
+6. Creates `MEDIA_ROOT` and the data tree with the target ownership (existing directories are left alone).
+7. Pulls the pinned images, runs `docker compose up -d --remove-orphans`, and polls all six HTTP endpoints (up to ~3 minutes).
 
 ---
 
@@ -310,7 +305,7 @@ docker compose up -d
 - **No default passwords.** The database password is generated per install. qBittorrent's `admin` / `admin` must be changed on first login — the installer cannot do it for you.
 - **Secrets stay out of git.** `.env` is gitignored and `chmod 600`; `.env.example` contains placeholders only.
 - **If you ever expose a UI,** put an authenticating proxy in front of it (Cloudflare Access, Authelia, Traefik + forward-auth). None of these apps are safe to publish raw.
-- **Containers run as your UID/GID** (`PUID`/`PGID`, default `1000:1000`), so media files stay owned by you rather than root.
+- **LinuxServer containers run as the invoking user's UID/GID** (`PUID`/`PGID`, detected and written by the installer), so media and download files stay owned by you rather than root. Immich manages its own storage and database permissions.
 
 ---
 
@@ -331,6 +326,8 @@ nCore downloads are not affected.
 |---|---|---|
 | `permission denied` on `docker compose` | docker group not active in this shell | `newgrp docker`, or log out and back in |
 | `MEDIA_ROOT is not set` when running compose manually | no `.env` yet | `cp .env.example .env`, edit `MEDIA_ROOT`, then `docker compose config -q` |
+| `.env is configured for PUID:PGID … but … is …` | `.env` was generated by another user | run as that user, delete `.env` to regenerate, or edit `PUID`/`PGID` |
+| `permission denied` writing under `MEDIA_ROOT` | drive mounted with another owner | `sudo chown -R $(id -u):$(id -g) /path/to/media` |
 | Sonarr/Radarr cannot reach qBittorrent | host IP used instead of service name | use `qbittorrent:8080` |
 | Prowlarr app test fails | same, or wrong API key | use `http://sonarr:8989` / `http://radarr:7878` and paste the API key |
 | Immich keeps restarting | Postgres not healthy or wrong `DB_PASSWORD` | `docker compose logs database`, check `.env` was not changed after first start |
