@@ -4,7 +4,8 @@
 
 Kis, **csak LAN-on elérhető** streaming stack Linux Mint VM-en: Sonarr, Radarr,
 Prowlarr, qBittorrent, Jellyfin és Immich. Nincs Cloudflare Tunnel, nincs
-Tailscale, nincs reverse proxy — minden közvetlenül a VM IP-jén hallgat.
+Tailscale, nincs reverse proxy — minden közvetlenül a VM IP-jén hallgat. VPN
+alapból szintén nincs; opcionálisan a torrentforgalom alá tehető, lásd lentebb.
 
 Az adatok egy külön meghajtón vannak, amit a `MEDIA_ROOT` alá csatolsz
 (alapértelmezés: `/srv/stream-at-home`, a fő hoston ennek a `/data` felel meg).
@@ -76,6 +77,38 @@ SUDO_PASS=jelszo ./install.sh
 A `SUDO_PASS` csak a sudo hitelesítésre szolgál, nem kerül fájlba, logba vagy
 commitba. Interaktív terminálban egyszerűen `./install.sh` — a sudo maga kér
 jelszót.
+
+### Opcionális: VPN a torrent alá
+
+A stack VPN nélkül is teljesen működik, de a torrentforgalom az, amit az
+internetszolgáltató jellemzően lát. Ehhez van egy külön Compose fájl, ami a
+qBittorrentet gluetun WireGuard-alagútja mögé teszi:
+
+```bash
+VPN_ENABLED=true
+VPN_SERVICE_PROVIDER=custom            # vagy protonvpn, "private internet access", ...
+WIREGUARD_PRIVATE_KEY=...
+WIREGUARD_ADDRESSES=10.2.0.2/32
+WIREGUARD_PUBLIC_KEY=...
+VPN_ENDPOINT_IP=203.0.113.10
+VPN_ENDPOINT_PORT=51820
+```
+
+Ezután `./install.sh` — a telepítő észleli a `VPN_ENABLED=true`-t, és magától
+hozzáadja a `docker-compose.vpn.yml` overlay-t. Telepítő nélkül:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+```
+
+A qBittorrent a gluetun hálózati névterében fut, tehát nem tud kikerülni az
+alagutat: a WebUI marad a `:8080`-on, a Sonarr/Radarr továbbra is a
+`qbittorrent:8080` címet használja, és ha az alagút elszáll, nincs forgalom —
+nem szivárog ki a lakásos IP.
+
+Az **ingyenes csomagok ide nem jók**: a ProtonVPN Free és a Windscribe Free is
+kizárja a P2P-t. A szolgáltatókról (port forwarding), a kill switch
+teszteléséről és a hibakeresésről a [docs/vpn.md](docs/vpn.md) szól.
 
 ## Adatok
 

@@ -1,0 +1,95 @@
+# ============================================================
+# stream_at_home — optional VPN overlay (gluetun)
+#
+# Routes qBittorrent's traffic through a WireGuard tunnel. Everything else
+# (Jellyfin, Immich, Sonarr, Radarr, Prowlarr) stays on the normal network,
+# because they do not need the tunnel and you want them reachable on the LAN.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+#
+# install.sh adds this file automatically when VPN_ENABLED=true is set in
+# .env, so `./install.sh` and the command above are equivalent.
+#
+# Requires Docker Compose >= 2.24 (for `!reset`) and /dev/net/tun on the host.
+# See docs/vpn.md for provider settings, port forwarding and the kill-switch
+# test.
+# ============================================================
+name: stream-at-home
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ============================================================
+  # GLUETUN — WireGuard tunnel + kill switch
+  # qBittorrent shares this container's network namespace, so every packet
+  # it sends leaves through the tunnel. If the tunnel dies, the firewall
+  # inside gluetun drops the traffic instead of falling back to the LAN.
+  # ============================================================
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TZ: ${TZ:-Europe/Budapest}
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:?Set VPN_SERVICE_PROVIDER in .env (see docs/vpn.md)}
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:?Set WIREGUARD_PRIVATE_KEY in .env (see docs/vpn.md)}
+      # Only used with VPN_SERVICE_PROVIDER=custom (any WireGuard config):
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
+      WIREGUARD_PUBLIC_KEY: ${WIREGUARD_PUBLIC_KEY:-}
+      VPN_ENDPOINT_IP: ${VPN_ENDPOINT_IP:-}
+      VPN_ENDPOINT_PORT: ${VPN_ENDPOINT_PORT:-}
+      # Known providers: choose a region instead of a single endpoint.
+      SERVER_COUNTRIES: ${VPN_SERVER_COUNTRIES:-}
+      SERVER_CITIES: ${VPN_SERVER_CITIES:-}
+      # Port forwarding, natively supported by gluetun for ProtonVPN, PIA and
+      # PrivateVPN. Off by default.
+      VPN_PORT_FORWARDING: ${VPN_PORT_FORWARDING:-off}
+      # The tunnel must still reach the *arr apps on the docker bridge, and
+      # the LAN must still reach the WebUI.
+      FIREWALL_OUTBOUND_SUBNETS: ${VPN_OUTBOUND_SUBNETS:-172.16.0.0/12,192.168.0.0/16}
+      FIREWALL_INPUT_PORTS: "8080"
+      DOT: "on"
+    ports:
+      # The WebUI port moves here: qBittorrent cannot publish ports itself.
+      - "8080:8080"
+    networks:
+      arrnetwork:
+        # Keeps http://qbittorrent:8080 working in Sonarr/Radarr, so their
+        # download client settings do not have to change.
+        aliases:
+          - qbittorrent
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging: *default-logging
+
+  # ============================================================
+  # QBITTORRENT — moved into gluetun's network namespace
+  # `!reset` is required: compose refuses `ports`/`networks` together with
+  # `network_mode: service:`. The WebUI port is published on gluetun instead,
+  # and the old 6881 mapping is dropped because incoming peers now arrive
+  # through the tunnel (see port forwarding in docs/vpn.md).
+  # ============================================================
+  qbittorrent:
+    network_mode: "service:gluetun"
+    ports: !reset []
+    networks: !reset []
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        # Restart qBittorrent when gluetun restarts: the shared network
+        # namespace is recreated, otherwise qBittorrent loses connectivity.
+        restart: true

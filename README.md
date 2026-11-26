@@ -23,6 +23,7 @@ This repository is the *infrastructure*: the Compose file, the installer, the fo
 - **Reproducible** — every image is pinned to `tag@sha256:…`, so a `pull` six months later gives you the same stack.
 - **Idempotent installer** — one script installs Docker, creates the `.env` with a generated database password, prepares the folders, starts everything and waits for health.
 - **Predictable storage** — a single `${MEDIA_ROOT}` with a fixed tree keeps hardlinks and atomic moves inside one filesystem.
+- **VPN opt-in** — one extra Compose file puts qBittorrent behind a WireGuard tunnel with a real kill switch, while the rest of the stack stays on the LAN.
 
 ---
 
@@ -99,6 +100,8 @@ flowchart LR
 
 **LAN-only by default.** No Cloudflare Tunnel, no Tailscale, no reverse proxy. Every UI listens on the host's LAN IP. That is a deliberate constraint, not an unfinished feature: these tools were never designed to face the internet, and a homelab does not need to.
 
+**VPN is opt-in, and only for egress.** Torrent traffic is the one thing that leaves the house in a way you might not want your ISP to see. `docker-compose.vpn.yml` puts **qBittorrent only** behind gluetun's WireGuard tunnel: the container shares the tunnel's network namespace, so it has no route around it, and gluetun's firewall drops packets when the tunnel dies. Jellyfin, Immich and the arrs stay direct, because tunnelling a media server only adds latency and breaks LAN discovery.
+
 **Pin by tag *and* digest.** `latest` tags are banned. Each image line carries an exact tag and `sha256` digest. Upgrades are a conscious edit of that line followed by `pull` and `up -d` — never an accidental side effect of a restart.
 
 **One data root, one view of it.** Everything lives under `MEDIA_ROOT`. Sonarr/Radarr see it as `/data`, qBittorrent sees `torrents/` as `/torrents`, Jellyfin sees `media/` as `/data/media`. Because downloads and the library are on the same filesystem, imports can hardlink instead of copying — instant, space-free, and seed-friendly.
@@ -118,11 +121,13 @@ flowchart LR
 ```text
 .
 ├── docker-compose.yml    # 9 services, pinned images, health checks, log caps
+├── docker-compose.vpn.yml  # optional overlay: qBittorrent behind WireGuard
 ├── install.sh            # idempotent installer (Docker, .env, folders, start, wait)
 ├── setup-folders.sh      # creates the data tree under MEDIA_ROOT
 ├── .env.example          # template; the real .env is generated and gitignored
 ├── README.md             # this file
 ├── README.hu.md          # Hungarian version
+├── docs/vpn.md           # VPN setup, providers, kill-switch test
 ├── docs/screenshots/     # screenshots used by the README
 └── LICENSE               # GPL-3.0
 ```
@@ -192,6 +197,30 @@ Immich       http://<host-ip>:2283
 5. Creates `.env` from `.env.example` with a random `DB_PASSWORD`, the detected UID/GID and the system timezone; `chmod 600`.
 6. Creates `MEDIA_ROOT` and the data tree with the target ownership (existing directories are left alone).
 7. Pulls the pinned images, runs `docker compose up -d --remove-orphans`, and polls all six HTTP endpoints (up to ~3 minutes).
+
+### Optional: VPN for qBittorrent
+
+The stack runs fine without a VPN, but torrent traffic is the one thing you may not want your ISP to see. Set the flag and a WireGuard config in `.env`:
+
+```bash
+VPN_ENABLED=true
+VPN_SERVICE_PROVIDER=custom            # or protonvpn, "private internet access", ...
+WIREGUARD_PRIVATE_KEY=...
+WIREGUARD_ADDRESSES=10.2.0.2/32
+WIREGUARD_PUBLIC_KEY=...
+VPN_ENDPOINT_IP=203.0.113.10
+VPN_ENDPOINT_PORT=51820
+```
+
+Re-run `./install.sh` — it notices `VPN_ENABLED=true` and adds the overlay automatically. Without the installer:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+```
+
+qBittorrent then runs inside gluetun's network namespace: the WebUI stays on `:8080`, Sonarr and Radarr keep using `qbittorrent:8080`, and a dead tunnel means no traffic instead of a leak.
+
+Free VPN tiers are **not** usable here — ProtonVPN Free and Windscribe Free both exclude P2P. [docs/vpn.md](docs/vpn.md) covers providers with port forwarding, the kill-switch test and troubleshooting.
 
 ---
 

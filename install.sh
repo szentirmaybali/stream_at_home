@@ -161,6 +161,15 @@ fi
 sudo_cmd docker compose version >/dev/null 2>&1 \
   || die "Docker Compose is not available after installation."
 
+# Compares the installed Compose version against a "major.minor" requirement.
+# Only used in an `|| die` context, so no set -e surprises.
+compose_version_ge() {
+  local required="$1" have
+  have="$(sudo_cmd docker compose version --short 2>/dev/null | sed 's/^v//' | head -n 1)"
+  [ -n "$have" ] || return 1
+  [ "$(printf '%s\n%s\n' "$required" "$have" | sort -V | head -n 1)" = "$required" ]
+}
+
 # Add the invoking user to the docker group (takes effect in a new session).
 ADDED_TO_DOCKER=0
 if [ "$TARGET_UID" -ne 0 ] && [ "$HAS_PASSWD_ENTRY" -eq 1 ] && getent group docker >/dev/null 2>&1; then
@@ -232,6 +241,39 @@ if [ "$PUID" != "$TARGET_UID" ] || [ "$PGID" != "$TARGET_GID" ]; then
 fi
 
 # ------------------------------------------------------------
+# 5b. Optional VPN overlay (docs/vpn.md)
+# ------------------------------------------------------------
+COMPOSE_FILES=(-f docker-compose.yml)
+VPN_ACTIVE=0
+
+if [ "${VPN_ENABLED:-false}" = "true" ]; then
+  [ -f docker-compose.vpn.yml ] || die "VPN_ENABLED=true, but docker-compose.vpn.yml is missing from ${REPO_DIR}."
+  compose_version_ge 2.24 || die "The VPN overlay needs Docker Compose >= 2.24 (for '!reset'). Installed: $(sudo_cmd docker compose version --short 2>/dev/null || echo unknown)."
+  [ -e /dev/net/tun ] || die "/dev/net/tun is missing. Load the module with: sudo modprobe tun"
+
+  [ -n "${VPN_SERVICE_PROVIDER:-}" ] || die "VPN_ENABLED=true, but VPN_SERVICE_PROVIDER is empty in .env (see docs/vpn.md)."
+  [ -n "${WIREGUARD_PRIVATE_KEY:-}" ] || die "VPN_ENABLED=true, but WIREGUARD_PRIVATE_KEY is empty in .env (see docs/vpn.md)."
+
+  if [ "$VPN_SERVICE_PROVIDER" = "custom" ]; then
+    [ -n "${WIREGUARD_PUBLIC_KEY:-}" ] || die "Provider 'custom' needs WIREGUARD_PUBLIC_KEY in .env."
+    [ -n "${VPN_ENDPOINT_IP:-}" ] || die "Provider 'custom' needs VPN_ENDPOINT_IP in .env."
+    [ -n "${WIREGUARD_ADDRESSES:-}" ] || die "Provider 'custom' needs WIREGUARD_ADDRESSES in .env."
+  fi
+
+  COMPOSE_FILES+=(-f docker-compose.vpn.yml)
+  VPN_ACTIVE=1
+  log "VPN overlay enabled: ${VPN_SERVICE_PROVIDER} (port forwarding: ${VPN_PORT_FORWARDING:-off})"
+  if [ "${VPN_PORT_FORWARDING:-off}" != "on" ]; then
+    warn "Port forwarding is off: downloads work, but seeding will be limited. See docs/vpn.md."
+  fi
+else
+  log "VPN overlay disabled (VPN_ENABLED=false)"
+fi
+
+compose() { sudo_cmd docker compose "${COMPOSE_FILES[@]}" "$@"; }
+COMPOSE_HINT="docker compose ${COMPOSE_FILES[*]}"
+
+# ------------------------------------------------------------
 # 6. Data root and directory tree
 # ------------------------------------------------------------
 if [ ! -d "$MEDIA_ROOT" ]; then
@@ -258,10 +300,10 @@ MEDIA_ROOT="$MEDIA_ROOT" PUID="$TARGET_UID" PGID="$TARGET_GID" bash "$REPO_DIR/s
 # 7. Pull and start
 # ------------------------------------------------------------
 log "Pulling pinned images..."
-sudo_cmd docker compose pull
+compose pull
 
 log "Starting the stack..."
-sudo_cmd docker compose up -d --remove-orphans
+compose up -d --remove-orphans
 
 # ------------------------------------------------------------
 # 8. Wait for the HTTP endpoints
@@ -270,8 +312,8 @@ log "Waiting for the services (this can take a few minutes)..."
 command -v curl >/dev/null 2>&1 || die "curl is required to wait for the services."
 
 wait_http() {
-  local port="$1" path="$2" name="$3" code="" i
-  for i in $(seq 1 90); do
+  local port="$1" path="$2" name="$3" tries="${4:-90}" code="" i
+  for i in $(seq 1 "$tries"); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
       "http://127.0.0.1:${port}${path}" 2>/dev/null || true)"
     case "$code" in
@@ -288,12 +330,25 @@ wait_http() {
 }
 
 FAILED=0
+# With the VPN overlay, qBittorrent starts only after gluetun is healthy,
+# and the tunnel handshake can take a while.
+QB_TRIES=90
+if [ "$VPN_ACTIVE" -eq 1 ]; then
+  QB_TRIES=180
+fi
+
 wait_http 8989  /ping                     Sonarr        || FAILED=1
 wait_http 7878  /ping                     Radarr        || FAILED=1
 wait_http 9696  /ping                     Prowlarr      || FAILED=1
-wait_http 8080  /                         qBittorrent   || FAILED=1
+wait_http 8080  /                         qBittorrent   "$QB_TRIES" || FAILED=1
 wait_http 8096  /health                   Jellyfin      || FAILED=1
 wait_http 2283  /ping                     Immich        || FAILED=1
+
+if [ "$VPN_ACTIVE" -eq 1 ] && [ "$FAILED" -ne 0 ]; then
+  warn "qBittorrent did not answer. Check the tunnel first:"
+  printf '  docker logs --tail=50 gluetun\n'
+  printf '  docker exec gluetun wget -qO- https://ipinfo.io/ip\n'
+fi
 
 # ------------------------------------------------------------
 # 9. Summary
@@ -305,14 +360,14 @@ fi
 [ -n "$HOST_IP" ] || HOST_IP="<host-ip>"
 
 log "Containers:"
-sudo_cmd docker compose ps
+compose ps
 
 printf '\n'
 if [ "$FAILED" -eq 0 ]; then
   printf '\033[1;32mInstallation complete.\033[0m\n'
 else
   printf '\033[1;33mThe stack is running, but some endpoints did not answer yet.\033[0m\n'
-  printf 'Check the logs with: sudo docker compose logs --tail=100 <service>\n'
+  printf 'Check the logs with: %s logs --tail=100 <service>\n' "$COMPOSE_HINT"
 fi
 
 if [ "$ADDED_TO_DOCKER" -eq 1 ]; then
@@ -332,6 +387,17 @@ LAN addresses:
 Data:          ${MEDIA_ROOT}
 Owner:         ${TARGET_USER} (${TARGET_UID}:${TARGET_GID})
 Config:        ${REPO_DIR}/.env (chmod 600, gitignored)
+EOF
+
+if [ "$VPN_ACTIVE" -eq 1 ]; then
+  printf 'VPN:           %s (port forwarding: %s)\n' "$VPN_SERVICE_PROVIDER" "${VPN_PORT_FORWARDING:-off}"
+  printf '               exit IP: docker exec gluetun wget -qO- https://ipinfo.io/ip\n'
+  printf '               docs:    docs/vpn.md\n'
+else
+  printf 'VPN:           disabled (set VPN_ENABLED=true in .env, see docs/vpn.md)\n'
+fi
+
+cat <<EOF
 
 First steps:
   1. Sonarr/Radarr: Settings > General > copy the API key
